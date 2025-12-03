@@ -1,4 +1,4 @@
-from flask import Blueprint
+from flask import Blueprint, render_template
 
 root_views = Blueprint(
     "root",
@@ -10,4 +10,4 @@ root_views = Blueprint(
 
 @root_views.route("/")
 def index():
-    return "Hello World!"
+    return render_template("root/index.html")
