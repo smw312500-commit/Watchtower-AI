@@ -8,6 +8,7 @@ dependencies = [
     "flask>=3.1.2",
     "flask-login>=0.6.3",
     "flask-migrate>=4.1.0",
+    "flask-security[common,fsqla]>=5.7.1",
     "flask-sqlalchemy>=3.1.1",
     "flask-wtf>=1.2.2",
     "python-dotenv>=1.2.1",
