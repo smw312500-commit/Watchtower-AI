@@ -1,15 +1,17 @@
-import uuid
-from pathlib import Path
-
+import cv2
+import numpy as np
 from flask import (
     Blueprint,
     render_template,
     current_app,
     send_from_directory,
-    jsonify,
+    Response,
 )
-from ultralytics import YOLO
 
+from src.domains.detect.detector import (
+    detector_models,
+    DetectorEnum,
+)
 from src.domains.detect.forms import UploadImageForm
 
 detect_views = Blueprint(
@@ -26,35 +28,25 @@ def images(filename):
 def detect_images():
     form = UploadImageForm()
     if form.validate_on_submit():
-
         file = form.image.data
-        ext = Path(file.filename).suffix
-        # 아래처럼 werkzeug의 secure_filename을 사용해도 될듯
-        # image_secure_filename = secure_filename(file.filename)
-        image_uuid_file_name = str(uuid.uuid4())
-        image_path = Path(
-            current_app.config["UPLOAD_FOLDER"], image_uuid_file_name + ext
-        )
-        file.save(image_path)
+        file_bytes = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-        model = YOLO(
-            Path(current_app.config["MODELS_FOLDER"], "fire_detect_v251205_1.pt"),
-            verbose=False,
-        )
-        results = model(image_path, conf=0.5, verbose=False)
+        selected_detector = form.model.data
+        if selected_detector not in [de.value for de in DetectorEnum]:
+            return "잘못된 모델입니다.", 400
+        model = detector_models[DetectorEnum(selected_detector)]()
+        results = model.detect(img, conf=0.5)
 
-        # for result in results:
-        #     boxes = result.boxes  # Boxes object for bounding box outputs
-        #     masks = result.masks  # Masks object for segmentation masks outputs
-        #     keypoints = result.keypoints  # Keypoints object for pose outputs
-        #     probs = result.probs  # Probs object for classification outputs
-        #     obb = result.obb  # Oriented boxes object for OBB outputs
-        #     result.show()  # display to screen
-        detect_file_name = f"detect_{image_uuid_file_name}"
-        detect_image_path = Path(
-            current_app.config["UPLOAD_FOLDER"], detect_file_name + ext
-        )
-        results[0].save(filename=detect_image_path)  # save to disk
-
-        return jsonify({"filename": detect_file_name + ext})
+        return ndarray_to_image_bytes(results[0].plot())
+    form.model.data = DetectorEnum.FireDetectV1.value
     return render_template("detect/detect_images.html", form=form)
+
+
+def ndarray_to_image_bytes(array: np.ndarray):
+    success, encoded = cv2.imencode(".png", array)
+    if not success:
+        return "Encode error", 500
+
+    img_bytes = encoded.tobytes()
+    return Response(img_bytes, mimetype="image/png")

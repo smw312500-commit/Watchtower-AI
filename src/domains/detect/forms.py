@@ -1,6 +1,9 @@
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileField, FileRequired, FileAllowed
+from wtforms.fields.choices import SelectField
 from wtforms.fields.simple import SubmitField
+
+from src.domains.detect.detector import DetectorEnum
 
 
 class UploadImageForm(FlaskForm):
@@ -13,7 +16,12 @@ class UploadImageForm(FlaskForm):
             ),
         ]
     )
-    submit = SubmitField("Upload")
+    model = SelectField(
+        "모델 선택",
+        choices=[(de.value, de.name) for de in DetectorEnum],
+        default=DetectorEnum.FireDetectV1,
+    )
+    submit = SubmitField("탐지")
 
 
 class UploadVideoForm(FlaskForm):
