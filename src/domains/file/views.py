@@ -6,13 +6,12 @@ from flask import (
     redirect,
     url_for,
     render_template,
-    abort,
     current_app,
     send_from_directory,
 )
 from flask_login import login_required, current_user
 
-from src.domains.file.forms import UploadImageForm
+from src.domains.detect.forms import UploadImageForm
 from src.domains.file.models import UserImage
 from src.main import db
 
