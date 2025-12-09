@@ -1,0 +1,13 @@
+{% extends 'detect/base.html' %}
+{% block title %}Image detail{% endblock %}
+{% block content %}
+<div class="row row-cols-1 row-cols-xxl-2 g-3">
+    <div class="col">
+        <img src="{{ url_for('detect.images', filename=user_image.image_path) }}" alt="이미지" class="img-fluid">
+    </div>
+    <div class="col">
+        <img src="" alt="이미지" class="img-fluid">
+    </div>
+</div>
+
+{% endblock %}

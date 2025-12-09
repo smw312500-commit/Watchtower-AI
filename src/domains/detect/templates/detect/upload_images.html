@@ -1,0 +1,21 @@
+{% extends 'detect/base.html' %}
+{% block title %}Upload images{% endblock %}
+{% block content %}
+<div>
+    <form method="post" enctype="multipart/form-data" novalidate>
+        {{ form.csrf_token }}
+        {% for message in get_flashed_messages() %}
+            <span class="dt-auth-flash">{{ message }}</span>
+        {% endfor %}
+        <div>
+            {{ form.image(class="form-control") }}
+        </div>
+        {% for error in form.image.errors %}
+        <span>{{ error }}</span>
+        {% endfor %}
+        <div>
+            <label>{{ form.submit(class="btn btn-primary") }}</label>
+        </div>
+    </form>
+</div>
+{% endblock %}

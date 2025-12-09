@@ -1,0 +1,16 @@
+{% extends 'detect/base.html' %}
+{% block title %}Video dashboard{% endblock %}
+{% block content %}
+<a href="{{ url_for('detect.upload_video') }}" class="btn btn-primary">업로드</a>
+<div class="row row-cols-4 g-4">
+    {% for user_video in user_videos %}
+    <div class="col">
+        <div class="bg-body-secondary p-3 ratio ratio-4x3">
+            <a href="">
+                <img src="" alt="이미지" class="img-thumbnail object-fit-cover">
+            </a>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}
