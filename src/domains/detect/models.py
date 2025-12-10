@@ -20,13 +20,16 @@ class UserImage(db.Model):
     )
 
     user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
-    user: Mapped["User"] = relationship(back_populates="images")
+    user: Mapped["User"] = relationship(
+        back_populates="images"
+    )  # noqa: F821  # ty:ignore[unresolved-reference]
 
 
 class UserVideo(db.Model):
     # __tablename__ = "user_images"
     id: Mapped[int] = mapped_column(primary_key=True)
     video_path: Mapped[str] = mapped_column()
+    thumbnail_path: Mapped[str] = mapped_column(nullable=True)
     # is_detected: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         default=datetime.datetime.now(datetime.UTC)
@@ -37,4 +40,6 @@ class UserVideo(db.Model):
     )
 
     user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
-    user: Mapped["User"] = relationship(back_populates="videos")
+    user: Mapped["User"] = relationship(
+        back_populates="videos"
+    )  # noqa: F821  # ty:ignore[unresolved-reference]

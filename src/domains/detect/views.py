@@ -2,6 +2,7 @@ import uuid
 from pathlib import Path
 from typing import List
 
+import cv2
 from flask import (
     Blueprint,
     render_template,
@@ -79,6 +80,13 @@ def videos(filename: str):
     )
 
 
+@detect_views.get("/videos/thumbnail/<path:thumbnail>")
+def thumbnails(thumbnail: str):
+    return send_from_directory(
+        Path(current_app.config["UPLOAD_FOLDER"], "videos"), thumbnail
+    )
+
+
 @detect_views.route("/upload/videos", methods=["GET", "POST"])
 @login_required
 def upload_video():
@@ -94,7 +102,13 @@ def upload_video():
         )
         file.save(video_path)
 
-        user_video = UserVideo(user_id=current_user.id, video_path=video_uuid_file_name)
+        thumbnail_path = extract_thumbnail(video_path)
+
+        user_video = UserVideo(
+            user_id=current_user.id,
+            video_path=video_uuid_file_name,
+            thumbnail_path=thumbnail_path,
+        )
         db.session.add(user_video)
         db.session.commit()
 
@@ -107,6 +121,24 @@ def detect_videos(video_id: int):
     user_video: UserVideo = db.get_or_404(UserVideo, video_id)
 
     return render_template("detect/video_detail.html", user_video=user_video)
+
+
+def extract_thumbnail(video_path: Path) -> str | None:
+    save_path = video_path.parent
+    thumbnail_name = f"{video_path.name}.webp"
+    cap = cv2.VideoCapture(str(video_path))
+    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_count // 2)
+
+    ret, frame = cap.read()
+    if ret:
+        cv2.imwrite(str(save_path / thumbnail_name), frame)
+    else:
+        return None
+
+    cap.release()
+    return thumbnail_name
 
 
 # @detect_views.route("/images", methods=["GET", "POST"])
