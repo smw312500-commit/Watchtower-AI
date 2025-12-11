@@ -199,8 +199,8 @@ def detect_videos(base_path: str, src: str, dest_name: str, selected_model: str)
         results = detector.detect(frame, conf=0.5, verbose=False)
         out.write(results[0].plot())
 
-    cap.release()
     out.release()
+    cap.release()
     print(f"End detecting videos: {dest_name}.mp4")
 
 
