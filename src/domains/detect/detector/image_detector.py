@@ -5,8 +5,7 @@ from pathlib import Path
 from ultralytics import YOLO
 
 
-basedir = Path(__file__).resolve().parent.parent.parent.parent
-model_path = Path(basedir, os.environ.get("MODELS_FOLDER", "models"))
+model_path = Path(os.environ.get("MODELS_FOLDER", "models"))
 
 
 class AbstractDetector(ABC):
