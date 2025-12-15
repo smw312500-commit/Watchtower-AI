@@ -195,12 +195,8 @@ class VideoDetectorWrongWay(BaseVideoDetector):
     VEHICLE_CLASSES = [2, 3, 5, 7]  # car, motorbike, bus, truck (COCO)
 
     def __init__(self):
-        # 팀 코드 구조: models 폴더의 yolo11n.pt를 기본으로 사용 :contentReference[oaicite:3]{index=3}
         super().__init__(models_folder / "yolo11n.pt", verbose=False)
 
-    # -----------------------------
-    # Helpers (ported from wrong_way7.py)
-    # -----------------------------
     def _get_centers(self, result, allowed_classes=None):
         centers = {}
         for box in result.boxes:
@@ -241,14 +237,14 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         return tracks
 
     def _lane_direction_step(
-            self,
-            track_id,
-            move_dir,
-            lane_map,
-            lane_acc,
-            normal_up,
-            normal_down,
-            cnt_thresh=10,
+        self,
+        track_id,
+        move_dir,
+        lane_map,
+        lane_acc,
+        normal_up,
+        normal_down,
+        cnt_thresh=10,
     ):
         if track_id in lane_map:
             return lane_map[track_id]
@@ -281,13 +277,13 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         return None
 
     def _learn_direction(
-            self,
-            video_path: str,
-            warmup_seconds=45,
-            max_match_dist=80.0,
-            min_step=1.0,
-            refine_iters=2,
-            hysteresis_H=0.15,
+        self,
+        video_path: str,
+        warmup_seconds=45,
+        max_match_dist=80.0,
+        min_step=1.0,
+        refine_iters=2,
+        hysteresis_H=0.15,
     ):
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -388,16 +384,16 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         return normal_up, normal_down
 
     def _build_lane_masks(
-            self,
-            video_path: str,
-            normal_up,
-            normal_down,
-            paint_seconds=45,
-            min_step=1.0,
-            cnt_thresh=10,
-            thickness_scale=0.95,
-            thickness_min=9,
-            thickness_max=45,
+        self,
+        video_path: str,
+        normal_up,
+        normal_down,
+        paint_seconds=45,
+        min_step=1.0,
+        cnt_thresh=10,
+        thickness_scale=0.95,
+        thickness_min=9,
+        thickness_max=45,
     ):
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -509,9 +505,7 @@ class VideoDetectorWrongWay(BaseVideoDetector):
             raise RuntimeError("learn_direction failed (not enough motion vectors)")
 
         # 2) Build lane masks
-        mask_up, mask_down = self._build_lane_masks(
-            video_path, normal_up, normal_down
-        )
+        mask_up, mask_down = self._build_lane_masks(video_path, normal_up, normal_down)
         if mask_up is None or mask_down is None:
             raise RuntimeError("build_lane_masks failed")
 
@@ -531,7 +525,9 @@ class VideoDetectorWrongWay(BaseVideoDetector):
 
         target_fps = 15.0
         frame_step = max(1, int(round(fps / target_fps)))
-        threshold_frames = int(target_fps * 0.25)  # 네 기존 로직과 동일 컨셉 :contentReference[oaicite:6]{index=6}
+        threshold_frames = int(
+            target_fps * 0.25
+        )  # 네 기존 로직과 동일 컨셉 :contentReference[oaicite:6]{index=6}
         min_step = 1.0
         dot_threshold = 0.1
 
