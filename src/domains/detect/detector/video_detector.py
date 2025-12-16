@@ -18,20 +18,23 @@ class BaseVideoDetector:
         fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        alerts = []
 
         fourcc = cv2.VideoWriter.fourcc(*"avc1")
         out = cv2.VideoWriter(str(dest), fourcc, fps, (width, height))
 
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+        try:
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                results = self.model(frame, **kwargs)
+                out.write(results[0].plot())
+        finally:
+            out.release()
+            cap.release()
 
-            results = self.model(frame, **kwargs)
-            out.write(results[0].plot())
-
-        out.release()
-        cap.release()
+        return {"output_video": str(dest), "alerts": []}
 
 
 class VideoDetectorYolo11n(BaseVideoDetector):
@@ -498,6 +501,7 @@ class VideoDetectorWrongWay(BaseVideoDetector):
     # -----------------------------
     def detect(self, src: Path, dest: Path, **kwargs):
         video_path = str(src)
+        alerts = []
 
         # 1) Learn directions
         normal_up, normal_down = self._learn_direction(video_path)
@@ -546,12 +550,12 @@ class VideoDetectorWrongWay(BaseVideoDetector):
 
             results = self.model.track(frame, persist=True, verbose=False)
             result = results[0]
-            annotated = result.plot()
+            annotated = frame.copy()
             centers = self._get_centers(result)
 
-            # overlay masks (up=green, down=blue) :contentReference[oaicite:7]{index=7}
-            annotated[:, :, 1] = np.maximum(annotated[:, :, 1], mask_up)
-            annotated[:, :, 0] = np.maximum(annotated[:, :, 0], mask_down)
+            # 벡터 시각화
+            # annotated[:, :, 1] = np.maximum(annotated[:, :, 1], mask_up)
+            # annotated[:, :, 0] = np.maximum(annotated[:, :, 0], mask_down)
 
             for track_id, (cx, cy) in centers.items():
                 if track_id not in prev_centers:
@@ -596,16 +600,41 @@ class VideoDetectorWrongWay(BaseVideoDetector):
                     wrong_counter[track_id] = max(0, wrong_counter[track_id] - 1)
 
                 if wrong_counter[track_id] > threshold_frames:
+                    for box in result.boxes:
+                        if box.id is None:
+                            continue
+                        if int(box.id) != track_id:
+                            continue
+
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+                        # 빨간 박스
+                        cv2.rectangle(
+                            annotated,
+                            (x1, y1),
+                            (x2, y2),
+                            (0, 0, 255),
+                            2,
+                        )
+                    alerts.append(
+                        {
+                            "type": "WRONG_WAY",
+                            "track_id": track_id,
+                            "lane": lane_name,
+                            "frame": frame_idx,
+                        }
+                    )
                     # 화면 표기(로그는 팀 스타일에 맞춰 나중에 바꿔도 됨)
                     cv2.putText(
                         annotated,
                         f"WRONG WAY! ID:{track_id} lane:{lane_name}",
                         (max(10, cx_i - 60), max(30, cy_i - 30)),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
+                        0.5,
                         (0, 0, 255),
                         2,
                     )
+
                     wrong_counter[track_id] = 0
 
                 # 상태 텍스트
@@ -615,12 +644,14 @@ class VideoDetectorWrongWay(BaseVideoDetector):
                     f"ID:{track_id} {lane_name} cnt:{wrong_counter[track_id]}",
                     (cx_i, max(20, cy_i - 20)),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
+                    0.1,
                     color,
-                    2,
+                    1,
                 )
 
             out.write(annotated)
 
         out.release()
         cap.release()
+
+        return {"output_video": str(dest), "alerts": alerts}
