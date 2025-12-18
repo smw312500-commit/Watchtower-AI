@@ -18,7 +18,6 @@ class BaseVideoDetector:
         fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        alerts = []
 
         fourcc = cv2.VideoWriter.fourcc(*"avc1")
         out = cv2.VideoWriter(str(dest), fourcc, fps, (width, height))
@@ -28,8 +27,11 @@ class BaseVideoDetector:
                 ret, frame = cap.read()
                 if not ret:
                     break
-                results = self.model(frame, **kwargs)
+
+                # Base는 공용: classes 제한/VEHICLE_CLASSES 참조 절대 금지
+                results = self.model.track(frame, persist=True, verbose=False, **kwargs)
                 out.write(results[0].plot())
+
         finally:
             out.release()
             cap.release()
@@ -194,7 +196,6 @@ class VideoDetectorShoulderStop:
         out.release()
 
 class VideoDetectorWrongWay(BaseVideoDetector):
-
     VEHICLE_CLASSES = [2, 3, 5, 7]  # car, motorbike, bus, truck (COCO)
 
     def __init__(self):
@@ -204,9 +205,8 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         centers = {}
         for box in result.boxes:
             cls_id = int(box.cls[0])
-            cls_name = self.model.names[cls_id]
 
-            if allowed_classes is not None and cls_name not in allowed_classes:
+            if allowed_classes is not None and cls_id not in allowed_classes:
                 continue
 
             if box.id is None:
@@ -223,8 +223,7 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         tracks = {}
         for box in result.boxes:
             cls_id = int(box.cls[0])
-            cls_name = self.model.names[cls_id]
-            if allowed_classes is not None and cls_name not in allowed_classes:
+            if allowed_classes is not None and cls_id not in allowed_classes:
                 continue
 
             if box.id is None:
@@ -311,11 +310,13 @@ class VideoDetectorWrongWay(BaseVideoDetector):
             if frame_count > warmup_frames:
                 break
 
-            # 차량만 추적 (네 기존 로직 동일) :contentReference[oaicite:4]{index=4}
             result = self.model.track(
                 frame, persist=True, verbose=False, classes=self.VEHICLE_CLASSES
             )[0]
-            centers_dict = self._get_centers(result)
+
+            centers_dict = self._get_centers(
+                result, allowed_classes=self.VEHICLE_CLASSES
+            )
 
             if len(centers_dict) == 0:
                 prev_centers = None
@@ -407,7 +408,7 @@ class VideoDetectorWrongWay(BaseVideoDetector):
             fps = 30.0
 
         paint_frames = int(fps * float(paint_seconds))
-        target_fps = 15.0
+        target_fps = 30.0
         frame_step = max(1, int(round(fps / target_fps)))
 
         ret, frame0 = cap.read()
@@ -441,7 +442,8 @@ class VideoDetectorWrongWay(BaseVideoDetector):
             result = self.model.track(
                 frame, persist=True, verbose=False, classes=self.VEHICLE_CLASSES
             )[0]
-            tracks = self._get_tracks(result)
+
+            tracks = self._get_tracks(result, allowed_classes=self.VEHICLE_CLASSES)
 
             for tid, (cx, cy, bw, bh) in tracks.items():
                 if tid not in prev:
@@ -456,7 +458,6 @@ class VideoDetectorWrongWay(BaseVideoDetector):
                 step = float(np.hypot(dx, dy))
                 if step < float(min_step):
                     continue
-
                 if step > 120.0:
                     continue
 
@@ -496,12 +497,15 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         cap.release()
         return mask_up, mask_down
 
-    # -----------------------------
-    # Required interface (team pipeline)
-    # -----------------------------
     def detect(self, src: Path, dest: Path, **kwargs):
         video_path = str(src)
         alerts = []
+        wrong_hold = {}  # track_id -> remaining hold frames
+        last_lane = {}
+
+        target_fps = 30.0
+        HOLD_SECONDS = 4.0
+        HOLD_FRAMES = int(target_fps * HOLD_SECONDS)
 
         # 1) Learn directions
         normal_up, normal_down = self._learn_direction(video_path)
@@ -513,7 +517,6 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         if mask_up is None or mask_down is None:
             raise RuntimeError("build_lane_masks failed")
 
-        # 3) Run detection and write output video (no cv2.imshow; 팀 구조는 파일 출력) :contentReference[oaicite:5]{index=5}
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise RuntimeError(f"cannot open video: {src}")
@@ -521,137 +524,167 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0:
             fps = 30.0
+        target_fps = fps
+        frame_step = 1
+
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         fourcc = cv2.VideoWriter.fourcc(*"avc1")
         out = cv2.VideoWriter(str(dest), fourcc, fps, (width, height))
 
-        target_fps = 15.0
         frame_step = max(1, int(round(fps / target_fps)))
-        threshold_frames = int(
-            target_fps * 0.25
-        )  # 네 기존 로직과 동일 컨셉 :contentReference[oaicite:6]{index=6}
+        threshold_frames = int(target_fps * 0.12)
+
         min_step = 1.0
-        dot_threshold = 0.1
+        dot_threshold = 0.03
 
         prev_centers = {}
         wrong_counter = {}
 
         frame_idx = 0
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+        try:
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-            frame_idx += 1
-            if (frame_idx % frame_step) != 0:
-                continue
+                frame_idx += 1
+                target_fps = fps  # 의미상 통일
+                frame_step = 1
+                # hold decay (processing-frame 기준)
+                if wrong_hold:
+                    for tid in list(wrong_hold.keys()):
+                        wrong_hold[tid] -= 1
+                        if wrong_hold[tid] <= 0:
+                            wrong_hold.pop(tid, None)
 
-            results = self.model.track(frame, persist=True, verbose=False)
-            result = results[0]
-            annotated = frame.copy()
-            centers = self._get_centers(result)
+                # 차량만 track
+                result = self.model.track(
+                    frame, persist=True, verbose=False, classes=self.VEHICLE_CLASSES
+                )[0]
 
-            # 벡터 시각화
-            # annotated[:, :, 1] = np.maximum(annotated[:, :, 1], mask_up)
-            # annotated[:, :, 0] = np.maximum(annotated[:, :, 0], mask_down)
+                box_map = {}
+                for b in result.boxes:
+                    if b.id is None:
+                        continue
+                    tid = int(b.id)
+                    x1, y1, x2, y2 = map(int, b.xyxy[0])
+                    box_map[tid] = (x1, y1, x2, y2)
 
-            for track_id, (cx, cy) in centers.items():
-                if track_id not in prev_centers:
+                annotated = frame.copy()
+                centers = self._get_centers(
+                    result, allowed_classes=self.VEHICLE_CLASSES
+                )
+                # 벡터 시각화
+                # annotated[:, :, 1] = np.maximum(annotated[:, :, 1], mask_up)
+                # annotated[:, :, 0] = np.maximum(annotated[:, :, 0], mask_down)
+
+                for track_id, (cx, cy) in centers.items():
+                    if track_id not in prev_centers:
+                        prev_centers[track_id] = (cx, cy)
+                        wrong_counter[track_id] = 0
+                        continue
+
+                    prev_cx, prev_cy = prev_centers[track_id]
+                    dx = cx - prev_cx
+                    dy = cy - prev_cy
                     prev_centers[track_id] = (cx, cy)
-                    wrong_counter[track_id] = 0
-                    continue
 
-                prev_cx, prev_cy = prev_centers[track_id]
-                dx = cx - prev_cx
-                dy = cy - prev_cy
-                prev_centers[track_id] = (cx, cy)
+                    step = float((dx * dx + dy * dy) ** 0.5)
+                    if step < min_step:
+                        continue
 
-                step = float((dx * dx + dy * dy) ** 0.5)
-                if step < min_step:
-                    continue
+                    move_dir = np.array([dx, dy], dtype=np.float32) / (step + 1e-12)
 
-                move_dir = np.array([dx, dy], dtype=np.float32) / (step + 1e-12)
+                    cx_i, cy_i = int(cx), int(cy)
 
-                cx_i, cy_i = int(cx), int(cy)
-                r = 6
-                y1 = max(0, cy_i - r)
-                y2 = min(mask_up.shape[0], cy_i + r + 1)
-                x1 = max(0, cx_i - r)
-                x2 = min(mask_up.shape[1], cx_i + r + 1)
+                    # 🔥 r 키움 (덜 걸쳐도 감지)
+                    r = 12
+                    y1 = max(0, cy_i - r)
+                    y2 = min(mask_up.shape[0], cy_i + r + 1)
+                    x1 = max(0, cx_i - r)
+                    x2 = min(mask_up.shape[1], cx_i + r + 1)
 
-                up_score = int(np.sum(mask_up[y1:y2, x1:x2]))
-                down_score = int(np.sum(mask_down[y1:y2, x1:x2]))
+                    up_score = int(np.sum(mask_up[y1:y2, x1:x2]))
+                    down_score = int(np.sum(mask_down[y1:y2, x1:x2]))
 
-                if up_score > down_score:
-                    expected_normal = normal_up
-                    lane_name = "up"
-                elif down_score > up_score:
-                    expected_normal = normal_down
-                    lane_name = "down"
-                else:
-                    continue
+                    LANE_MARGIN = 200  # 작을수록 덜 걸쳐도 lane 확정
 
-                sim = float(np.dot(move_dir, expected_normal))
-                if sim < -dot_threshold:
-                    wrong_counter[track_id] += 1
-                else:
-                    wrong_counter[track_id] = max(0, wrong_counter[track_id] - 1)
+                    if up_score - down_score > LANE_MARGIN:
+                        expected_normal = normal_up
+                        lane_name = "up"
+                        last_lane[track_id] = lane_name
 
-                if wrong_counter[track_id] > threshold_frames:
-                    for box in result.boxes:
-                        if box.id is None:
-                            continue
-                        if int(box.id) != track_id:
-                            continue
+                    elif down_score - up_score > LANE_MARGIN:
+                        expected_normal = normal_down
+                        lane_name = "down"
+                        last_lane[track_id] = lane_name
 
-                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    else:
+                        # ✅ 애매하면 이전 lane 유지 (핵심)
+                        lane_name = last_lane.get(track_id)
+                        if lane_name is None:
+                            # ✅ 최초 1회는 “그냥 더 큰 쪽”으로라도 lane을 만든다 (덜 걸쳐도 뜨게)
+                            lane_name = "up" if (up_score >= down_score) else "down"
+                            last_lane[track_id] = lane_name
 
-                        # 빨간 박스
-                        cv2.rectangle(
+                        expected_normal = (
+                            normal_up if lane_name == "up" else normal_down
+                        )
+
+                    sim = float(np.dot(move_dir, expected_normal))
+                    if sim < -dot_threshold:
+                        wrong_counter[track_id] += 1
+                    else:
+                        wrong_counter[track_id] = 0
+
+                    # 확정 순간: 홀드만 건다
+                    if wrong_counter[track_id] > threshold_frames:
+                        wrong_hold[track_id] = HOLD_FRAMES
+
+                        alerts.append(
+                            {
+                                "type": "WRONG_WAY",
+                                "track_id": track_id,
+                                "lane": lane_name,
+                                "frame": frame_idx,
+                            }
+                        )
+                        wrong_counter[track_id] = 0
+
+                    # 텍스트: 항상 출력 (YOLO 박스는 안 그림)
+                    if track_id in box_map:
+                        bx1, by1, bx2, by2 = box_map[track_id]
+                        cv2.putText(
                             annotated,
-                            (x1, y1),
-                            (x2, y2),
+                            f"ID:{track_id} {lane_name}",
+                            (bx1, max(20, by1 - 10)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            (0, 255, 255),
+                            2,
+                        )
+
+                    # D 핵심: 홀드 중이면 매 프레임 빨간 박스 유지
+                    if wrong_hold.get(track_id, 0) > 0 and track_id in box_map:
+                        rx1, ry1, rx2, ry2 = box_map[track_id]
+                        cv2.rectangle(annotated, (rx1, ry1), (rx2, ry2), (0, 0, 255), 2)
+                        # 여기부터하기
+                        cv2.putText(
+                            annotated,
+                            "Wrong Way",
+                            (rx1, max(20, ry1 - 10)),  # 박스 위쪽
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            1.2,
                             (0, 0, 255),
                             2,
                         )
-                    alerts.append(
-                        {
-                            "type": "WRONG_WAY",
-                            "track_id": track_id,
-                            "lane": lane_name,
-                            "frame": frame_idx,
-                        }
-                    )
-                    # 화면 표기(로그는 팀 스타일에 맞춰 나중에 바꿔도 됨)
-                    cv2.putText(
-                        annotated,
-                        f"WRONG WAY! ID:{track_id} lane:{lane_name}",
-                        (max(10, cx_i - 60), max(30, cy_i - 30)),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5,
-                        (0, 0, 255),
-                        2,
-                    )
 
-                    wrong_counter[track_id] = 0
+                out.write(annotated)
 
-                # 상태 텍스트
-                color = (0, 0, 255) if wrong_counter[track_id] > 0 else (0, 255, 0)
-                cv2.putText(
-                    annotated,
-                    f"ID:{track_id} {lane_name} cnt:{wrong_counter[track_id]}",
-                    (cx_i, max(20, cy_i - 20)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.1,
-                    color,
-                    1,
-                )
-
-            out.write(annotated)
-
-        out.release()
-        cap.release()
+        finally:
+            out.release()
+            cap.release()
 
         return {"output_video": str(dest), "alerts": alerts}
