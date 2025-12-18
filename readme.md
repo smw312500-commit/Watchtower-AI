@@ -25,7 +25,7 @@ uv run flask db upgrade
 
 ```bash
 uv run flask run
-uv run celery -A src.make_celery worker --loglevel INFO --pool=eventlet
+uv run celery -A src.make_celery worker --loglevel INFO -P gevent
 ```
 
 ## Environment
