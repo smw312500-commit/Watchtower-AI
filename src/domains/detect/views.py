@@ -4,8 +4,6 @@ from typing import List
 
 import cv2
 from celery import shared_task
-from celery.result import AsyncResult
-from charset_normalizer import detect
 from flask import (
     Blueprint,
     current_app,
@@ -82,26 +80,6 @@ def image_status(image_id: int):
         return jsonify({"status": "SUCCESS", "image_path": detection_image.image_path})
 
 
-@detect_views.post("/images/<int:image_id>/delete")
-@login_required
-def delete_image(image_id):
-    image = UserImage.query.get_or_404(image_id)
-
-    # DetectionImage 먼저 삭제
-    DetectionImage.query.filter_by(user_image_id=image.id).delete()
-
-    # 파일 삭제
-    image_path = Path(current_app.config["UPLOAD_FOLDER"], "images", image.image_path)
-    if image_path.exists():
-        image_path.unlink()
-
-    # UserImage 삭제
-    db.session.delete(image)
-    db.session.commit()
-
-    return redirect(url_for("detect.image_dashboard"))
-
-
 @detect_views.route("/upload/images", methods=["GET", "POST"])
 @login_required
 def upload_image():
@@ -132,26 +110,49 @@ def upload_image():
     )
 
 
+@detect_views.post("/images/<int:image_id>/delete")
+@login_required
+def delete_image(image_id):
+    delete_images([image_id])
+
+    return redirect(url_for("detect.image_dashboard"))
+
+
 @detect_views.post("/images/delete-selected")
 @login_required
 def delete_selected_images():
-    image_ids = request.form.getlist("delete_ids")
+    image_ids: List[str] = request.form.getlist("delete_ids")
 
     if not image_ids:
         return redirect(url_for("detect.upload_image"))
 
-    images = UserImage.query.filter(UserImage.id.in_(image_ids)).all()
+    delete_images(list(map(lambda x: int(x), image_ids)))
 
-    for img in images:
-        DetectionImage.query.filter_by(user_image_id=img.id).delete()
-        file_path = Path(current_app.config["UPLOAD_FOLDER"], "images", img.image_path)
-        if file_path.exists():
-            file_path.unlink()
+    return redirect(url_for("detect.upload_image"))
 
-        db.session.delete(img)
+
+def delete_images(delete_ids: List[int]):
+    images_folder = Path(current_app.config["UPLOAD_FOLDER"], "images")
+
+    detection_images = DetectionImage.query.filter(
+        DetectionImage.user_image_id.in_(delete_ids)
+    ).all()
+    for detection_image in detection_images:
+        path = images_folder / detection_image.image_path
+        if path.exists():
+            path.unlink()
+
+        db.session.delete(detection_image)
+
+    user_images = UserImage.query.filter(UserImage.id.in_(delete_ids)).all()
+    for user_image in user_images:
+        path = images_folder / user_image.image_path
+        if path.exists():
+            path.unlink()
+
+        db.session.delete(user_image)
 
     db.session.commit()
-    return redirect(url_for("detect.upload_image"))
 
 
 @detect_views.route("/images/detail/<int:image_id>", methods=["GET", "POST"])
