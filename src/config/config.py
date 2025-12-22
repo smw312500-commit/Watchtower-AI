@@ -28,6 +28,7 @@ class DevelopmentConfig(BaseConfig):
     CELERY = dict(
         broker_url=os.environ.get("CELERY_BROKER_URL"),
         result_backend=os.environ.get("CELERY_RESULT_BACKEND"),
+        task_track_started=True,
         task_ignore_result=True,
     )
 
