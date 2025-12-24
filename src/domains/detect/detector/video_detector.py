@@ -22,21 +22,16 @@ class BaseVideoDetector:
         fourcc = cv2.VideoWriter.fourcc(*"avc1")
         out = cv2.VideoWriter(str(dest), fourcc, fps, (width, height))
 
-        try:
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-                # Base는 공용: classes 제한/VEHICLE_CLASSES 참조 절대 금지
-                results = self.model.track(frame, persist=True, verbose=False, **kwargs)
-                out.write(results[0].plot())
+            results = self.model(frame, **kwargs)
+            out.write(results[0].plot())
 
-        finally:
-            out.release()
-            cap.release()
-
-        return {"output_video": str(dest), "alerts": []}
+        out.release()
+        cap.release()
 
 
 class VideoDetectorYolo11n(BaseVideoDetector):
