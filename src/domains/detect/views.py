@@ -4,7 +4,6 @@ from typing import List
 
 import cv2
 from celery import shared_task
-from celery.result import AsyncResult
 from flask import (
     Blueprint,
     current_app,
@@ -25,6 +24,7 @@ from src.domains.detect.detector import (
     video_detector_models,
 )
 from src.domains.detect.forms import (
+    DeleteImageForm,
     DetectImageForm,
     DetectVideoForm,
     UploadImageForm,
@@ -33,6 +33,7 @@ from src.domains.detect.forms import (
 from src.domains.detect.models import (
     DetectionImage,
     DetectionVideo,
+    TaskStatus,
     UserImage,
     UserVideo,
 )
@@ -46,8 +47,13 @@ detect_views = Blueprint(
 @detect_views.get("/images")
 def image_dashboard():
     user_images: List[UserImage] = UserImage.query.order_by(UserImage.id.desc()).all()
+    delete_form = DeleteImageForm()
 
-    return render_template("detect/image_dashboard.html", user_images=user_images)
+    return render_template(
+        "detect/image_dashboard.html",
+        user_images=user_images,
+        delete_form=delete_form,
+    )
 
 
 @detect_views.get("/images/<path:filename>")
@@ -78,6 +84,7 @@ def image_status(image_id: int):
 @login_required
 def upload_image():
     form = UploadImageForm()
+    delete_form = DeleteImageForm()
 
     if form.validate_on_submit():
         file = form.image.data
@@ -94,7 +101,58 @@ def upload_image():
         db.session.commit()
 
         return redirect(url_for("detect.image_dashboard"))
-    return render_template("detect/upload_images.html", form=form)
+    images = UserImage.query.order_by(UserImage.id.desc()).all()
+    return render_template(
+        "detect/upload_images.html",
+        form=form,
+        delete_form=delete_form,
+        images=images,
+    )
+
+
+@detect_views.post("/images/<int:image_id>/delete")
+@login_required
+def delete_image(image_id):
+    delete_images([image_id])
+
+    return redirect(url_for("detect.image_dashboard"))
+
+
+@detect_views.post("/images/delete-selected")
+@login_required
+def delete_selected_images():
+    image_ids: List[str] = request.form.getlist("delete_ids")
+
+    if not image_ids:
+        return redirect(url_for("detect.upload_image"))
+
+    delete_images(list(map(lambda x: int(x), image_ids)))
+
+    return redirect(url_for("detect.upload_image"))
+
+
+def delete_images(delete_ids: List[int]):
+    images_folder = Path(current_app.config["UPLOAD_FOLDER"], "images")
+
+    detection_images = DetectionImage.query.filter(
+        DetectionImage.user_image_id.in_(delete_ids)
+    ).all()
+    for detection_image in detection_images:
+        path = images_folder / detection_image.image_path
+        if path.exists():
+            path.unlink()
+
+        db.session.delete(detection_image)
+
+    user_images = UserImage.query.filter(UserImage.id.in_(delete_ids)).all()
+    for user_image in user_images:
+        path = images_folder / user_image.image_path
+        if path.exists():
+            path.unlink()
+
+        db.session.delete(user_image)
+
+    db.session.commit()
 
 
 @detect_views.route("/images/detail/<int:image_id>", methods=["GET", "POST"])
@@ -133,8 +191,13 @@ def image_detail(image_id: int):
 @detect_views.get("/videos")
 def video_dashboard():
     user_videos: List[UserVideo] = UserVideo.query.order_by(UserVideo.id.desc()).all()
+    delete_form = DeleteImageForm()
 
-    return render_template("detect/video_dashboard.html", user_videos=user_videos)
+    return render_template(
+        "detect/video_dashboard.html",
+        user_videos=user_videos,
+        delete_form=delete_form,
+    )
 
 
 @detect_views.get("/videos/<path:filename>")
@@ -164,16 +227,16 @@ def check_task():
         .first()
     )
 
-    if not detection_video:
-        return jsonify({"status": "None"})
-
-    return jsonify(
-        {
-            "status": "Ok",
-            "task_id": detection_video.task_id,
-            "video_path": detection_video.video_path,
-        }
-    )
+    if detection_video is None:
+        return jsonify({"status": "NONE"})
+    else:
+        return jsonify(
+            {
+                "detection_video_id": detection_video.id,
+                "video_path": detection_video.video_path,
+                "status": detection_video.status.value,
+            }
+        )
 
 
 @detect_views.get("/videos/thumbnail/<path:thumbnail>")
@@ -212,6 +275,49 @@ def upload_video():
     return render_template("detect/upload_videos.html", form=form)
 
 
+# 삭제 라우트
+@detect_views.post("/videos/delete-selected")
+@login_required
+def delete_selected_videos():
+    video_ids: List[str] = request.form.getlist("delete_ids")
+
+    if not video_ids:
+        return redirect(url_for("detect.video_dashboard"))
+
+    delete_videos(list(map(lambda x: int(x), video_ids)))
+    return redirect(url_for("detect.video_dashboard"))
+
+
+def delete_videos(delete_ids: List[int]):
+    videos_folder = Path(current_app.config["UPLOAD_FOLDER"], "videos")
+
+    detection_videos: List[DetectionVideo] = DetectionVideo.query.filter(
+        DetectionVideo.user_video_id.in_(delete_ids)
+    ).all()
+    for detection_video in detection_videos:
+        path = videos_folder / detection_video.video_path
+        if path.exists():
+            path.unlink()
+
+        db.session.delete(detection_video)
+
+    user_videos: List[UserVideo] = UserVideo.query.filter(
+        UserVideo.id.in_(delete_ids)
+    ).all()
+    for user_video in user_videos:
+        video_path = videos_folder / user_video.video_path
+        if video_path.exists():
+            video_path.unlink()
+
+        thumbnail_path = videos_folder / user_video.thumbnail_path
+        if thumbnail_path.exists():
+            thumbnail_path.unlink()
+
+        db.session.delete(user_video)
+
+    db.session.commit()
+
+
 @detect_views.route("/videos/detail/<int:video_id>", methods=["GET", "POST"])
 def video_detail(video_id: int):
     user_video: UserVideo = db.get_or_404(UserVideo, video_id)
@@ -225,27 +331,28 @@ def video_detail(video_id: int):
 
         dest = str(uuid.uuid4())
 
-        result = detect_videos.delay(
-            str(Path(current_app.config["UPLOAD_FOLDER"], "videos")),
-            str(user_video.video_path),
-            dest,
-            selected_model,
-        )
-        current_app.logger.info(f"Task 추가: {result.id}")
-
         detection_video = DetectionVideo(
             model=selected_model,
-            task_id=result.id,
             video_path=f"{dest}.mp4",
             user_video=user_video,
         )
         db.session.add(detection_video)
         db.session.commit()
 
+        result = detect_videos.delay(
+            str(Path(current_app.config["UPLOAD_FOLDER"], "videos")),
+            str(user_video.video_path),
+            dest,
+            selected_model,
+            detection_video.id,
+        )
+        current_app.logger.info(f"Task 추가: {result.id}")
+
         return jsonify(
             {
-                "result_id": detection_video.task_id,
+                "detection_video_id": detection_video.id,
                 "video_path": detection_video.video_path,
+                "status": detection_video.status.value,
             }
         )
 
@@ -271,38 +378,35 @@ def extract_thumbnail(video_path: Path) -> str | None:
 
 
 @shared_task(ignore_result=False)
-def detect_videos(base: str, src: str, dest_name: str, selected_model: str):
+def detect_videos(
+    base: str, src: str, dest_name: str, selected_model: str, detection_video_id: int
+):
     current_app.logger.info(f"Detecting videos: {src}")
-    base_path: Path = Path(base)
 
-    detector = video_detector_models[VideoDetectorEnum(selected_model)]()
-    detector.detect(
-        base_path / src, base_path / f"{dest_name}.mp4", conf=0.5, verbose=False
+    detection_video: DetectionVideo | None = DetectionVideo.query.get(
+        detection_video_id
     )
+    if detection_video:
+        detection_video.status = TaskStatus.STARTED
+        db.session.commit()
 
-    current_app.logger.info(f"End detecting videos: {dest_name}.mp4")
-    return dest_name
+    try:
+        base_path: Path = Path(base)
 
-
-@detect_views.get("/result/<string:result_id>")
-def task_result(result_id: str):
-    result = AsyncResult(result_id)
-
-    if result.failed():
-        current_app.logger.error(f"Task failed: {result_id}\n{result.info}")
-        return (
-            jsonify(
-                {
-                    "state": result.state,
-                    "error": str(result.info),
-                }
-            ),
-            500,
+        detector = video_detector_models[VideoDetectorEnum(selected_model)]()
+        detector.detect(
+            base_path / src, base_path / f"{dest_name}.mp4", conf=0.5, verbose=False
         )
 
-    return jsonify(
-        {
-            "state": result.state,
-            "result": result.result,
-        }
-    )
+        current_app.logger.info(f"End detecting videos: {dest_name}.mp4")
+
+        if detection_video:
+            detection_video.status = TaskStatus.SUCCESS
+            db.session.commit()
+    except Exception as e:
+        current_app.logger.error(f"End detecting videos: {e}")
+        if detection_video:
+            detection_video.status = TaskStatus.FAILURE
+            db.session.commit()
+
+    return dest_name
