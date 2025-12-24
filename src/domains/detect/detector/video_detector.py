@@ -193,6 +193,11 @@ class VideoDetectorShoulderStop:
 class VideoDetectorWrongWay(BaseVideoDetector):
     VEHICLE_CLASSES = [2, 3, 5, 7]  # car, motorbike, bus, truck (COCO)
 
+    # ✅ 탐지/트래킹 강화 상수는 일단 유지해도 되지만, yaml은 제거(미사용)
+    DETECT_IMGSZ = 1280
+    DETECT_CONF = 0.15
+    DETECT_IOU = 0.55
+
     def __init__(self):
         super().__init__(models_folder / "yolo11n.pt", verbose=False)
 
@@ -200,13 +205,10 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         centers = {}
         for box in result.boxes:
             cls_id = int(box.cls[0])
-
             if allowed_classes is not None and cls_id not in allowed_classes:
                 continue
-
             if box.id is None:
                 continue
-
             track_id = int(box.id)
             x1, y1, x2, y2 = box.xyxy[0]
             cx = float((x1 + x2) / 2)
@@ -220,10 +222,8 @@ class VideoDetectorWrongWay(BaseVideoDetector):
             cls_id = int(box.cls[0])
             if allowed_classes is not None and cls_id not in allowed_classes:
                 continue
-
             if box.id is None:
                 continue
-
             track_id = int(box.id)
             x1, y1, x2, y2 = box.xyxy[0]
             cx = float((x1 + x2) / 2)
@@ -243,6 +243,7 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         normal_down,
         cnt_thresh=10,
     ):
+        print("_lane_direction_step" + "=" * 40)
         if track_id in lane_map:
             return lane_map[track_id]
 
@@ -282,6 +283,7 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         refine_iters=2,
         hysteresis_H=0.15,
     ):
+        print("_learn_direction" + "=" * 40)
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             return None, None
@@ -289,7 +291,6 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0:
             fps = 30.0
-
         warmup_frames = int(fps * float(warmup_seconds))
 
         frame_count = 0
@@ -300,19 +301,24 @@ class VideoDetectorWrongWay(BaseVideoDetector):
             ret, frame = cap.read()
             if not ret:
                 break
-
             frame_count += 1
             if frame_count > warmup_frames:
                 break
 
+            # ✅ 원복: tracker/imgsz/conf/iou 제거
             result = self.model.track(
-                frame, persist=True, verbose=False, classes=self.VEHICLE_CLASSES
+                frame,
+                persist=True,
+                verbose=False,
+                classes=self.VEHICLE_CLASSES,
+                imgsz=self.DETECT_IMGSZ,
+                conf=self.DETECT_CONF,
+                iou=self.DETECT_IOU,
             )[0]
 
             centers_dict = self._get_centers(
                 result, allowed_classes=self.VEHICLE_CLASSES
             )
-
             if len(centers_dict) == 0:
                 prev_centers = None
                 continue
@@ -333,12 +339,10 @@ class VideoDetectorWrongWay(BaseVideoDetector):
             prev_centers = centers
 
         cap.release()
-
         if len(vectors) == 0:
             return None, None
 
         vecs = np.stack(vectors, axis=0).astype(np.float32)
-
         angles = np.degrees(np.arctan2(vecs[:, 1], vecs[:, 0]))
         median_angle = float(np.median(angles))
         labels = np.zeros(len(vecs), dtype=np.int32)  # 0=up, 1=down
@@ -369,15 +373,12 @@ class VideoDetectorWrongWay(BaseVideoDetector):
             new_labels = labels.copy()
             new_labels[diff > float(hysteresis_H)] = 0
             new_labels[diff < -float(hysteresis_H)] = 1
-
             labels = new_labels
 
             new_up = compute_normal(uvecs[labels == 0])
             new_down = compute_normal(uvecs[labels == 1])
-
             if new_up is None or new_down is None:
                 break
-
             normal_up, normal_down = new_up, new_down
 
         return normal_up, normal_down
@@ -394,6 +395,7 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         thickness_min=9,
         thickness_max=45,
     ):
+        print("_build_lane_masks" + "=" * 40)
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             return None, None
@@ -403,8 +405,10 @@ class VideoDetectorWrongWay(BaseVideoDetector):
             fps = 30.0
 
         paint_frames = int(fps * float(paint_seconds))
-        target_fps = 30.0
-        frame_step = max(1, int(round(fps / target_fps)))
+
+        # ✅ 원본 길이 유지
+        target_fps = fps
+        frame_step = 1
 
         ret, frame0 = cap.read()
         if not ret:
@@ -434,8 +438,15 @@ class VideoDetectorWrongWay(BaseVideoDetector):
             if frame_idx > paint_frames:
                 break
 
+            # ✅ 원복: tracker/imgsz/conf/iou 제거
             result = self.model.track(
-                frame, persist=True, verbose=False, classes=self.VEHICLE_CLASSES
+                frame,
+                persist=True,
+                verbose=False,
+                classes=self.VEHICLE_CLASSES,
+                imgsz=self.DETECT_IMGSZ,
+                conf=self.DETECT_CONF,
+                iou=self.DETECT_IOU,
             )[0]
 
             tracks = self._get_tracks(result, allowed_classes=self.VEHICLE_CLASSES)
@@ -453,18 +464,19 @@ class VideoDetectorWrongWay(BaseVideoDetector):
                 step = float(np.hypot(dx, dy))
                 if step < float(min_step):
                     continue
-                if step > 120.0:
-                    continue
-
-                life_cnt[tid] += 1
-                if life_cnt[tid] < 10:
-                    continue
-
-                move_dir = np.array([dx, dy], dtype=np.float32) / step
 
                 base = max(bw, bh)
                 if base < 18:
                     continue
+                step_max = max(120.0, min(360.0, base * 1.6))
+                if step > float(step_max):
+                    continue
+
+                life_cnt[tid] += 1
+                if life_cnt[tid] < 5:
+                    continue
+
+                move_dir = np.array([dx, dy], dtype=np.float32) / (step + 1e-12)
 
                 lane = self._lane_direction_step(
                     tid,
@@ -495,22 +507,8 @@ class VideoDetectorWrongWay(BaseVideoDetector):
     def detect(self, src: Path, dest: Path, **kwargs):
         video_path = str(src)
         alerts = []
-        wrong_hold = {}  # track_id -> remaining hold frames
+        wrong_hold = {}
         last_lane = {}
-
-        target_fps = 30.0
-        HOLD_SECONDS = 4.0
-        HOLD_FRAMES = int(target_fps * HOLD_SECONDS)
-
-        # 1) Learn directions
-        normal_up, normal_down = self._learn_direction(video_path)
-        if normal_up is None or normal_down is None:
-            raise RuntimeError("learn_direction failed (not enough motion vectors)")
-
-        # 2) Build lane masks
-        mask_up, mask_down = self._build_lane_masks(video_path, normal_up, normal_down)
-        if mask_up is None or mask_down is None:
-            raise RuntimeError("build_lane_masks failed")
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -519,8 +517,24 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0:
             fps = 30.0
+
         target_fps = fps
         frame_step = 1
+
+        HOLD_SECONDS = 4.0
+        HOLD_FRAMES = int(target_fps * HOLD_SECONDS)
+
+        print("before learn direction")
+        normal_up, normal_down = self._learn_direction(video_path)
+        if normal_up is None or normal_down is None:
+            cap.release()
+            raise RuntimeError("learn_direction failed (not enough motion vectors)")
+
+        print("before build lane masks")
+        mask_up, mask_down = self._build_lane_masks(video_path, normal_up, normal_down)
+        if mask_up is None or mask_down is None:
+            cap.release()
+            raise RuntimeError("build_lane_masks failed")
 
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -528,15 +542,14 @@ class VideoDetectorWrongWay(BaseVideoDetector):
         fourcc = cv2.VideoWriter.fourcc(*"avc1")
         out = cv2.VideoWriter(str(dest), fourcc, fps, (width, height))
 
-        frame_step = max(1, int(round(fps / target_fps)))
         threshold_frames = int(target_fps * 0.12)
-
         min_step = 1.0
         dot_threshold = 0.03
 
         prev_centers = {}
         wrong_counter = {}
 
+        print("main loop")
         frame_idx = 0
         try:
             while cap.isOpened():
@@ -545,18 +558,24 @@ class VideoDetectorWrongWay(BaseVideoDetector):
                     break
 
                 frame_idx += 1
-                target_fps = fps  # 의미상 통일
-                frame_step = 1
-                # hold decay (processing-frame 기준)
+                if (frame_idx % frame_step) != 0:
+                    continue
+
                 if wrong_hold:
                     for tid in list(wrong_hold.keys()):
                         wrong_hold[tid] -= 1
                         if wrong_hold[tid] <= 0:
                             wrong_hold.pop(tid, None)
 
-                # 차량만 track
+                # ✅ 원복: tracker/imgsz/conf/iou 제거
                 result = self.model.track(
-                    frame, persist=True, verbose=False, classes=self.VEHICLE_CLASSES
+                    frame,
+                    persist=True,
+                    verbose=False,
+                    classes=self.VEHICLE_CLASSES,
+                    imgsz=self.DETECT_IMGSZ,
+                    conf=self.DETECT_CONF,
+                    iou=self.DETECT_IOU,
                 )[0]
 
                 box_map = {}
@@ -571,9 +590,15 @@ class VideoDetectorWrongWay(BaseVideoDetector):
                 centers = self._get_centers(
                     result, allowed_classes=self.VEHICLE_CLASSES
                 )
-                # 벡터 시각화
-                # annotated[:, :, 1] = np.maximum(annotated[:, :, 1], mask_up)
-                # annotated[:, :, 0] = np.maximum(annotated[:, :, 0], mask_down)
+                # 벡터 표시
+                """
+                if mask_up is not None and mask_down is not None:
+                    # up=green, down=blue
+                    g = mask_up
+                    b = mask_down
+                    annotated[:, :, 1] = np.maximum(annotated[:, :, 1], g)
+                    annotated[:, :, 0] = np.maximum(annotated[:, :, 0], b)
+                """
 
                 for track_id, (cx, cy) in centers.items():
                     if track_id not in prev_centers:
@@ -593,8 +618,6 @@ class VideoDetectorWrongWay(BaseVideoDetector):
                     move_dir = np.array([dx, dy], dtype=np.float32) / (step + 1e-12)
 
                     cx_i, cy_i = int(cx), int(cy)
-
-                    # 🔥 r 키움 (덜 걸쳐도 감지)
                     r = 12
                     y1 = max(0, cy_i - r)
                     y2 = min(mask_up.shape[0], cy_i + r + 1)
@@ -604,26 +627,20 @@ class VideoDetectorWrongWay(BaseVideoDetector):
                     up_score = int(np.sum(mask_up[y1:y2, x1:x2]))
                     down_score = int(np.sum(mask_down[y1:y2, x1:x2]))
 
-                    LANE_MARGIN = 200  # 작을수록 덜 걸쳐도 lane 확정
-
+                    LANE_MARGIN = 200
                     if up_score - down_score > LANE_MARGIN:
                         expected_normal = normal_up
                         lane_name = "up"
                         last_lane[track_id] = lane_name
-
                     elif down_score - up_score > LANE_MARGIN:
                         expected_normal = normal_down
                         lane_name = "down"
                         last_lane[track_id] = lane_name
-
                     else:
-                        # ✅ 애매하면 이전 lane 유지 (핵심)
                         lane_name = last_lane.get(track_id)
                         if lane_name is None:
-                            # ✅ 최초 1회는 “그냥 더 큰 쪽”으로라도 lane을 만든다 (덜 걸쳐도 뜨게)
                             lane_name = "up" if (up_score >= down_score) else "down"
                             last_lane[track_id] = lane_name
-
                         expected_normal = (
                             normal_up if lane_name == "up" else normal_down
                         )
@@ -634,10 +651,8 @@ class VideoDetectorWrongWay(BaseVideoDetector):
                     else:
                         wrong_counter[track_id] = 0
 
-                    # 확정 순간: 홀드만 건다
                     if wrong_counter[track_id] > threshold_frames:
                         wrong_hold[track_id] = HOLD_FRAMES
-
                         alerts.append(
                             {
                                 "type": "WRONG_WAY",
@@ -648,7 +663,6 @@ class VideoDetectorWrongWay(BaseVideoDetector):
                         )
                         wrong_counter[track_id] = 0
 
-                    # 텍스트: 항상 출력 (YOLO 박스는 안 그림)
                     if track_id in box_map:
                         bx1, by1, bx2, by2 = box_map[track_id]
                         cv2.putText(
@@ -661,15 +675,13 @@ class VideoDetectorWrongWay(BaseVideoDetector):
                             2,
                         )
 
-                    # D 핵심: 홀드 중이면 매 프레임 빨간 박스 유지
                     if wrong_hold.get(track_id, 0) > 0 and track_id in box_map:
                         rx1, ry1, rx2, ry2 = box_map[track_id]
                         cv2.rectangle(annotated, (rx1, ry1), (rx2, ry2), (0, 0, 255), 2)
-                        # 여기부터하기
                         cv2.putText(
                             annotated,
                             "Wrong Way",
-                            (rx1, max(20, ry1 - 10)),  # 박스 위쪽
+                            (rx1, max(20, ry1 - 10)),
                             cv2.FONT_HERSHEY_SIMPLEX,
                             1.2,
                             (0, 0, 255),

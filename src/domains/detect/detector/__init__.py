@@ -10,6 +10,7 @@ from src.domains.detect.detector.video_detector import (
     BaseVideoDetector,
     VideoDetectorYolo11n,
     VideoDetectorShoulderStop,
+    VideoDetectorWrongWay,
 )
 
 
@@ -28,10 +29,12 @@ class VideoDetectorEnum(Enum):
     YOLO11n = "yolo11n"
     FireDetectV1 = "fire_detect_v1"
     ShoulderStop = "shoulder_stop"
+    WrongWay = "wrong_way"
 
 
 video_detector_models = {
     VideoDetectorEnum.YOLO11n: VideoDetectorYolo11n,
     VideoDetectorEnum.FireDetectV1: VideoDetectorFireDetectV1,
     VideoDetectorEnum.ShoulderStop: VideoDetectorShoulderStop,
+    VideoDetectorEnum.WrongWay: VideoDetectorWrongWay,
 }
